@@ -1,0 +1,28 @@
+# Example: one container per Cloudflare account. Copy to compose.yaml and keep
+# the token in an .env file (never commit it).
+services:
+  ddns:
+    image: ghcr.io/notolac/ozgo-cf-ddns:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"            # status page; bind to a LAN address if you prefer
+    environment:
+      - API_KEY=$API_KEY       # Cloudflare API token (Zone:Read + DNS:Edit)
+      - ZONE=example.com       # default zone for every record below
+      - PROXIED=true           # default proxy flag
+      # Public IP, proxied
+      - SUBDOMAIN_WWW=www
+      - SUBDOMAIN_BLOG=blog
+      # Apex record of another zone
+      - ZONE_SHOP=example.org
+      # Fixed private address, DNS only
+      - ZONE_NAS=example.org
+      - SUBDOMAIN_NAS=nas
+      - PROXIED_NAS=false
+      - STATIC_IP_NAS=192.0.2.10
+      # Optional
+      # - CRON=*/5 * * * *
+      # - WEB_USER=admin
+      # - WEB_PASSWORD=$WEB_PASSWORD
+      # - LOG_LEVEL=info
+      # - TZ=Europe/Madrid

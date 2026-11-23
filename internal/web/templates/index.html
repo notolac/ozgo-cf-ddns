@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="30">
+<title>ozgo-cf-ddns</title>
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e4e4df;
+  --ok: #1f7a3d; --ok-bg: #e3f3e8; --err: #b3261e; --err-bg: #fbe5e3; --wait: #7a5a00; --wait-bg: #fbf1d4;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #151514; --panel: #1f1f1d; --text: #ececea; --muted: #9a9a93; --line: #33332f;
+    --ok: #7fd49a; --ok-bg: #173523; --err: #f2a49d; --err-bg: #3d1a17; --wait: #e8c66a; --wait-bg: #3a2f10;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 1200px; margin: 0 auto; padding: 24px 16px 48px; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+.meta { color: var(--muted); margin: 0 0 20px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+.card b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
+.card span { color: var(--muted); font-size: 12px; }
+.wrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; min-width: 900px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; }
+tr:last-child td { border-bottom: 0; }
+code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.small { color: var(--muted); font-size: 12px; }
+.badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+.ok { color: var(--ok); background: var(--ok-bg); }
+.error { color: var(--err); background: var(--err-bg); }
+.pending { color: var(--wait); background: var(--wait-bg); }
+.errtext { color: var(--err); max-width: 340px; word-break: break-word; }
+footer { margin-top: 16px; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>ozgo-cf-ddns</h1>
+  <p class="meta">
+    {{if .Healthy}}<span class="badge ok">all records in sync</span>{{else if .RoundEnd.IsZero}}<span class="badge pending">first round running</span>{{else}}<span class="badge error">attention needed</span>{{end}}
+    · schedule <code>{{.Schedule}}</code> · version {{.Version}}
+  </p>
+
+  <div class="cards">
+    <div class="card"><b>{{.OK}}</b><span>in sync</span></div>
+    <div class="card"><b>{{.Errors}}</b><span>failing</span></div>
+    <div class="card"><b>{{.Pending}}</b><span>pending</span></div>
+    <div class="card"><b>{{ago .RoundEnd}}</b><span>last round · {{ts .RoundEnd}}</span></div>
+    <div class="card"><b>{{ago .NextRound}}</b><span>next round · {{ts .NextRound}}</span></div>
+  </div>
+
+  <div class="wrap">
+  <table>
+    <thead><tr>
+      <th>Record</th><th>State</th><th>IP (wanted / Cloudflare)</th><th>Proxy</th><th>Source</th>
+      <th>Last check</th><th>Last change in Cloudflare</th><th>Last error</th>
+    </tr></thead>
+    <tbody>
+    {{range .Records}}
+    <tr>
+      <td><code>{{.FQDN}}</code><div class="small">{{.Type}} · {{.Name}}</div></td>
+      <td><span class="badge {{.State}}">{{.State}}</span>{{if gt .Failures 0}}<div class="small">{{.Failures}} failure(s) in a row</div>{{end}}</td>
+      <td><code>{{or .DesiredIP "—"}}</code><div class="small"><code>{{or .CloudflareIP "—"}}</code></div></td>
+      <td>{{if .Proxied}}proxied{{else}}DNS only{{end}}{{if .CloudflareProxied}}{{if ne (deref .CloudflareProxied) .Proxied}}<div class="small">Cloudflare differs</div>{{end}}{{end}}</td>
+      <td>{{.Source}}</td>
+      <td>{{ago .LastCheck}}<div class="small">{{ts .LastCheck}}</div></td>
+      <td>{{if .CloudflareModified.IsZero}}—{{else}}{{ago .CloudflareModified}}<div class="small">{{ts .CloudflareModified}}</div>{{end}}{{if not .LastChange.IsZero}}<div class="small">written by agent {{ago .LastChange}}</div>{{end}}</td>
+      <td>{{if .LastError}}{{if eq .State "error"}}<div class="errtext">{{.LastError}}</div>{{else}}<div class="small">resolved: {{.LastError}}</div>{{end}}<div class="small">{{ts .LastErrorAt}}</div>{{else}}—{{end}}</td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+  </div>
+  <footer>Started {{ts .Started}} · JSON at <code>/api/status</code> · refreshes every 30 s</footer>
+</main>
+</body>
+</html>
