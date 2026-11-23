@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"net/url"
 	"os"
 	"regexp"
 	"slices"
@@ -83,6 +84,37 @@ func (r Record) FQDN() string {
 // IPv6 reports whether the record is an AAAA record.
 func (r Record) IPv6() bool { return r.Type == "AAAA" }
 
+// Secret is a string that never prints its value.
+type Secret string
+
+// String never prints the secret.
+func (s Secret) String() string {
+	if s == "" {
+		return ""
+	}
+	return "[redacted]"
+}
+
+// LogValue keeps secrets out of structured logs.
+func (s Secret) LogValue() slog.Value { return slog.StringValue(s.String()) }
+
+// MinSyncKeyLength is the shortest accepted SYNC_KEY.
+const MinSyncKeyLength = 32
+
+// Sync links several containers to one status page. The main container sets
+// only Key and accepts reports; a sidecar also sets URL and reports to it.
+type Sync struct {
+	Key      Secret // SYNC_KEY: shared key used to sign reports (HMAC-SHA256)
+	URL      string // SYNC_URL: base URL of the main container (sidecars only)
+	Instance string // INSTANCE_NAME: label of this container on the status page
+}
+
+// Sidecar reports whether this container sends its status to a main container.
+func (s Sync) Sidecar() bool { return s.URL != "" }
+
+// Main reports whether this container accepts reports from sidecars.
+func (s Sync) Main() bool { return s.Key != "" && s.URL == "" }
+
 // Web configures the status interface.
 type Web struct {
 	Enabled  bool
@@ -96,6 +128,7 @@ type Config struct {
 	Records   []Record
 	Schedule  *cron.Schedule
 	Web       Web
+	Sync      Sync
 	LogLevel  slog.Level
 	LogFormat string // text or json
 	Warnings  []string
@@ -118,8 +151,9 @@ var definingKeys = []string{"ZONE", "ZONE_FILE", "SUBDOMAIN", "SUBDOMAIN_FILE"}
 var sourceKeys = []string{"STATIC_IP", "CUSTOM_LOOKUP_CMD", "INTERFACE"}
 
 var (
-	nameRE = regexp.MustCompile(`^[A-Za-z0-9]+(_[A-Za-z0-9]+)*$`)
-	echoRE = regexp.MustCompile(`^echo\s+["']?([0-9A-Fa-f:.]+)["']?$`)
+	nameRE     = regexp.MustCompile(`^[A-Za-z0-9]+(_[A-Za-z0-9]+)*$`)
+	instanceRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]{0,62})$`)
+	echoRE     = regexp.MustCompile(`^echo\s+["']?([0-9A-Fa-f:.]+)["']?$`)
 )
 
 func init() {
@@ -430,6 +464,10 @@ func (e *envSet) globals(cfg *Config) error {
 		errs = append(errs, errors.New("WEB_USER and WEB_PASSWORD must be set together"))
 	}
 
+	if err := e.sync(cfg); err != nil {
+		errs = append(errs, err)
+	}
+
 	switch strings.ToLower(strings.TrimSpace(e.vars["LOG_LEVEL"])) {
 	case "", "info":
 		cfg.LogLevel = slog.LevelInfo
@@ -455,6 +493,59 @@ func (e *envSet) globals(cfg *Config) error {
 		if _, ok := e.vars[k]; ok {
 			cfg.Warnings = append(cfg.Warnings, k+" is ignored; set the container user with Docker's user option instead")
 		}
+	}
+	return errors.Join(errs...)
+}
+
+// ValidInstanceName reports whether name can label a container.
+func ValidInstanceName(name string) bool { return instanceRE.MatchString(name) }
+
+// sync reads SYNC_KEY, SYNC_URL and INSTANCE_NAME. Error messages never
+// contain the key.
+func (e *envSet) sync(cfg *Config) error {
+	var errs []error
+	key := e.vars["SYNC_KEY"]
+	if p, ok := e.vars["SYNC_KEY_FILE"]; ok && key == "" {
+		b, err := os.ReadFile(strings.TrimSpace(p))
+		if err != nil {
+			errs = append(errs, fmt.Errorf("SYNC_KEY_FILE: %w", err))
+		}
+		key = string(b)
+	}
+	key = strings.TrimSpace(key)
+	if key != "" && len(key) < MinSyncKeyLength {
+		errs = append(errs, fmt.Errorf("SYNC_KEY is too short: use at least %d characters (for example: openssl rand -hex 32)", MinSyncKeyLength))
+	}
+	cfg.Sync.Key = Secret(key)
+
+	if raw := strings.TrimSpace(e.vars["SYNC_URL"]); raw != "" {
+		u, err := url.Parse(raw)
+		switch {
+		case err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "":
+			errs = append(errs, errors.New("SYNC_URL must be an http:// or https:// URL, for example http://ddns:8080"))
+		case u.User != nil || u.RawQuery != "" || u.Fragment != "":
+			errs = append(errs, errors.New("SYNC_URL must not contain credentials, a query or a fragment"))
+		default:
+			cfg.Sync.URL = strings.TrimSuffix(u.String(), "/")
+		}
+		if key == "" {
+			errs = append(errs, errors.New("SYNC_URL needs SYNC_KEY, the same key as on the main container"))
+		}
+	}
+
+	name := strings.ToLower(strings.TrimSpace(e.vars["INSTANCE_NAME"]))
+	switch {
+	case name == "" && cfg.Sync.Sidecar():
+		errs = append(errs, errors.New("INSTANCE_NAME is required with SYNC_URL, so the main container can tell sidecars apart"))
+	case name == "":
+		name = "main"
+	case !ValidInstanceName(name):
+		errs = append(errs, fmt.Errorf("INSTANCE_NAME: %q must be 1-63 characters: letters, digits, '.', '_' or '-'", name))
+	}
+	cfg.Sync.Instance = name
+
+	if cfg.Sync.Main() && !cfg.Web.Enabled {
+		errs = append(errs, errors.New("SYNC_KEY without SYNC_URL makes this the main container, which needs WEB_ENABLED=true to receive reports"))
 	}
 	return errors.Join(errs...)
 }

@@ -3,10 +3,12 @@
 //	GET /             HTML status page (refreshes every 30 s)
 //	GET /api/status   the same data as JSON
 //	GET /healthz      200 when every record is in sync, 503 otherwise
+//	POST /api/sync    signed status reports from sidecars (main container only)
 //
 // When a user and password are configured, / and /api/status require HTTP
 // basic auth. /healthz stays open for the container health check and only
-// returns counts, never record names.
+// returns counts, never record names. /api/sync has its own authentication:
+// every report is signed with SYNC_KEY (see package hub).
 package web
 
 import (
@@ -23,6 +25,7 @@ import (
 	"time"
 
 	"github.com/notolac/ozgo-cf-ddns/internal/agent"
+	"github.com/notolac/ozgo-cf-ddns/internal/hub"
 )
 
 //go:embed templates/index.html
@@ -33,12 +36,20 @@ type Source interface {
 	Snapshot() agent.Snapshot
 }
 
+// Remotes provides the sidecars that report to this container.
+type Remotes interface {
+	Remotes() []hub.Remote
+}
+
 // Options configure the handler.
 type Options struct {
 	User     string
 	Password string
 	Logger   *slog.Logger
 	Now      func() time.Time
+	Instance string       // name of this container; shown when sidecars report
+	Remotes  Remotes      // sidecars; nil when this is not a main container
+	Sync     http.Handler // POST /api/sync; nil when this is not a main container
 }
 
 type server struct {
@@ -68,6 +79,9 @@ func Handler(src Source, opt Options) http.Handler {
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.Handle("GET /api/status", s.auth(http.HandlerFunc(s.api)))
 	mux.Handle("GET /{$}", s.auth(http.HandlerFunc(s.index)))
+	if opt.Sync != nil {
+		mux.Handle("POST "+hub.Path, opt.Sync)
+	}
 	return headers(mux)
 }
 
@@ -123,11 +137,27 @@ func (s *server) health(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
+// apiStatus keeps the v0.1 layout (the local snapshot at the top level) and
+// adds the sidecars.
+type apiStatus struct {
+	agent.Snapshot
+	Instance string       `json:"instance,omitempty"`
+	Sidecars []hub.Remote `json:"sidecars,omitempty"`
+}
+
+func (s *server) remotes() []hub.Remote {
+	if s.opt.Remotes == nil {
+		return nil
+	}
+	return s.opt.Remotes.Remotes()
+}
+
 func (s *server) api(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
-	if err := enc.Encode(s.src.Snapshot()); err != nil {
+	out := apiStatus{Snapshot: s.src.Snapshot(), Instance: s.opt.Instance, Sidecars: s.remotes()}
+	if err := enc.Encode(out); err != nil {
 		s.opt.Logger.Debug("writing status JSON", "error", err.Error())
 	}
 }
@@ -145,9 +175,54 @@ type recordView struct {
 	Host string // "@" for the zone apex
 }
 
-type pageView struct {
+// instanceView is one container: this one or a sidecar.
+type instanceView struct {
 	agent.Snapshot
-	Zones []zoneView
+	Name       string
+	Local      bool
+	Stale      bool
+	LastReport time.Time
+	Zones      []zoneView
+}
+
+type pageView struct {
+	Local     instanceView
+	Instances []instanceView // the local container first, then sidecars by name
+	Multi     bool           // show one section per container
+	Healthy   bool
+	OK        int
+	Errors    int
+	Pending   int
+	Stale     int
+	Zones     int
+}
+
+func (s *server) view() pageView {
+	snap := s.src.Snapshot()
+	local := instanceView{Snapshot: snap, Name: s.opt.Instance, Local: true, Zones: groupByZone(snap.Records)}
+	p := pageView{Local: local, Instances: []instanceView{local}, Multi: s.opt.Remotes != nil}
+	for _, r := range s.remotes() {
+		p.Instances = append(p.Instances, instanceView{
+			Snapshot: r.Status, Name: r.Instance, Stale: r.Stale, LastReport: r.Received,
+			Zones: groupByZone(r.Status.Records),
+		})
+	}
+	zones := map[string]bool{}
+	p.Healthy = true
+	for _, in := range p.Instances {
+		p.OK += in.OK
+		p.Errors += in.Errors
+		p.Pending += in.Pending
+		if in.Stale {
+			p.Stale++
+		}
+		p.Healthy = p.Healthy && in.Healthy && !in.Stale
+		for _, z := range in.Zones {
+			zones[z.Zone] = true
+		}
+	}
+	p.Zones = len(zones)
+	return p
 }
 
 // groupByZone sorts the records into one group per zone, in zone order.
@@ -164,7 +239,10 @@ func groupByZone(records []agent.RecordStatus) []zoneView {
 		}
 		z := &zones[i]
 		host := "@"
-		if r.FQDN != r.Zone {
+		switch {
+		case r.Zone == "":
+			host = r.FQDN
+		case r.FQDN != r.Zone:
 			host = strings.TrimSuffix(r.FQDN, "."+r.Zone)
 		}
 		z.Records = append(z.Records, recordView{RecordStatus: r, Host: host})
@@ -183,8 +261,7 @@ func groupByZone(records []agent.RecordStatus) []zoneView {
 
 func (s *server) index(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	snap := s.src.Snapshot()
-	if err := s.page.Execute(w, pageView{Snapshot: snap, Zones: groupByZone(snap.Records)}); err != nil {
+	if err := s.page.Execute(w, s.view()); err != nil {
 		s.opt.Logger.Error("rendering status page", "error", err.Error())
 	}
 }

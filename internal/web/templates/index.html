@@ -42,6 +42,9 @@ tbody.zone th { background: var(--bg); text-transform: none; letter-spacing: 0; 
 tbody.zone th .small { font-weight: 400; margin-left: 8px; }
 .host { font-weight: 600; }
 .zonepart { color: var(--muted); }
+h2 { font-size: 16px; margin: 28px 0 8px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+h2 .small { font-weight: 400; }
+.stale { color: var(--err); background: var(--err-bg); }
 footer { margin-top: 16px; color: var(--muted); font-size: 12px; }
 </style>
 </head>
@@ -49,19 +52,29 @@ footer { margin-top: 16px; color: var(--muted); font-size: 12px; }
 <main>
   <h1>ozgo-cf-ddns</h1>
   <p class="meta">
-    {{if .Healthy}}<span class="badge ok">all records in sync</span>{{else if .RoundEnd.IsZero}}<span class="badge pending">first round running</span>{{else}}<span class="badge error">attention needed</span>{{end}}
-    · schedule <code>{{.Schedule}}</code> · version {{.Version}}
+    {{if .Healthy}}<span class="badge ok">all records in sync</span>{{else if and (not .Multi) .Local.RoundEnd.IsZero}}<span class="badge pending">first round running</span>{{else}}<span class="badge error">attention needed</span>{{end}}
+    · schedule <code>{{.Local.Schedule}}</code> · version {{.Local.Version}}{{if .Multi}} · {{len .Instances}} container(s){{end}}
   </p>
 
   <div class="cards">
     <div class="card"><b>{{.OK}}</b><span>in sync</span></div>
     <div class="card"><b>{{.Errors}}</b><span>failing</span></div>
     <div class="card"><b>{{.Pending}}</b><span>pending</span></div>
-    <div class="card"><b>{{len .Zones}}</b><span>zones</span></div>
-    <div class="card"><b>{{ago .RoundEnd}}</b><span>last round · {{ts .RoundEnd}}</span></div>
-    <div class="card"><b>{{ago .NextRound}}</b><span>next round · {{ts .NextRound}}</span></div>
+    <div class="card"><b>{{.Zones}}</b><span>zones</span></div>
+    {{if .Stale}}<div class="card"><b>{{.Stale}}</b><span>sidecar(s) not reporting</span></div>{{end}}
+    <div class="card"><b>{{ago .Local.RoundEnd}}</b><span>last round · {{ts .Local.RoundEnd}}</span></div>
+    <div class="card"><b>{{ago .Local.NextRound}}</b><span>next round · {{ts .Local.NextRound}}</span></div>
   </div>
 
+  {{$multi := .Multi}}
+  {{range .Instances}}
+  {{if $multi}}
+  <h2 id="instance-{{.Name}}">{{.Name}}
+    <span class="small">{{if .Local}}main{{else}}sidecar{{end}} · version {{or .Version "—"}}</span>
+    {{if .Stale}}<span class="badge stale">not reporting</span>{{else if .Healthy}}<span class="badge ok">in sync</span>{{else if .RoundEnd.IsZero}}<span class="badge pending">first round running</span>{{else}}<span class="badge error">attention needed</span>{{end}}
+    <span class="small">{{if .Local}}last round {{ago .RoundEnd}}{{else}}last report {{ago .LastReport}} · last round {{ago .RoundEnd}}{{end}}</span>
+  </h2>
+  {{end}}
   <div class="wrap">
   <table>
     <thead><tr>
@@ -75,7 +88,7 @@ footer { margin-top: 16px; color: var(--muted); font-size: 12px; }
     <tbody>
     {{range .Records}}
     <tr>
-      <td><code title="{{.FQDN}}"><span class="host">{{.Host}}</span>{{if ne .Host "@"}}<span class="zonepart">.{{.Zone}}</span>{{end}}</code><div class="small">{{.Type}} · {{.Name}}</div></td>
+      <td><code title="{{.FQDN}}"><span class="host">{{.Host}}</span>{{if and (ne .Host "@") .Zone}}<span class="zonepart">.{{.Zone}}</span>{{end}}</code><div class="small">{{.Type}} · {{.Name}}</div></td>
       <td><span class="badge {{.State}}">{{.State}}</span>{{if gt .Failures 0}}<div class="small">{{.Failures}} failure(s) in a row</div>{{end}}</td>
       <td><code>{{or .DesiredIP "—"}}</code><div class="small"><code>{{or .CloudflareIP "—"}}</code></div></td>
       <td>{{if .Proxied}}proxied{{else}}DNS only{{end}}{{if .CloudflareProxied}}{{if ne (deref .CloudflareProxied) .Proxied}}<div class="small">Cloudflare differs</div>{{end}}{{end}}</td>
@@ -89,7 +102,8 @@ footer { margin-top: 16px; color: var(--muted); font-size: 12px; }
     {{end}}
   </table>
   </div>
-  <footer>Started {{ts .Started}} · JSON at <code>/api/status</code> · refreshes every 30 s</footer>
+  {{end}}
+  <footer>Started {{ts .Local.Started}} · JSON at <code>/api/status</code> · refreshes every 30 s</footer>
 </main>
 </body>
 </html>

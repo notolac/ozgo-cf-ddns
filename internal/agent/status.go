@@ -55,12 +55,16 @@ type Snapshot struct {
 
 // Status holds the live state shared between the agent and the web server.
 type Status struct {
-	mu   sync.RWMutex
-	snap Snapshot
+	mu      sync.RWMutex
+	snap    Snapshot
+	changed chan struct{}
 }
 
 func newStatus(version string, started time.Time, cfg *config.Config) *Status {
-	s := &Status{snap: Snapshot{Version: version, Started: started, Schedule: cfg.Schedule.String()}}
+	s := &Status{
+		snap:    Snapshot{Version: version, Started: started, Schedule: cfg.Schedule.String()},
+		changed: make(chan struct{}, 1),
+	}
 	for _, r := range cfg.Records {
 		s.snap.Records = append(s.snap.Records, RecordStatus{
 			Name: r.Name, FQDN: r.FQDN(), Zone: r.Zone, Type: r.Type,
@@ -99,7 +103,15 @@ func (s *Status) round(start, end, next time.Time) {
 	}
 	s.snap.NextRound = next
 	s.recount()
+	select {
+	case s.changed <- struct{}{}:
+	default: // a notification is already pending
+	}
 }
+
+// Changes receives a value when a round starts or ends. Notifications are coalesced:
+// a slow reader sees one pending signal, never a backlog.
+func (s *Status) Changes() <-chan struct{} { return s.changed }
 
 // recount must be called with mu held.
 func (s *Status) recount() {

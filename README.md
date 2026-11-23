@@ -41,6 +41,8 @@ clients.
   round restores the configured value.
 - Read-only status page grouped by zone, JSON API and health endpoint, with
   optional basic auth.
+- One page for several containers: sidecars (other accounts or tokens) report
+  to a main container, signed with a shared `SYNC_KEY`.
 - Structured logs (text or JSON) that never contain credentials.
 - Small image: static Go binary on Alpine, runs as a non-root user, multi-arch
   (amd64 and arm64).
@@ -164,6 +166,14 @@ record sets any of them, the unsuffixed defaults for these three are ignored.
 | `LOG_FORMAT` | `text` | `text` or `json`. |
 | `TZ` | `UTC` | Time zone for the status page and logs. |
 
+### Sync variables (one status page for several containers)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SYNC_KEY` / `SYNC_KEY_FILE` | | Shared key, at least 32 characters (`openssl rand -hex 32`). On its own it makes this the **main** container, which accepts reports from sidecars. |
+| `SYNC_URL` | | Base URL of the main container, e.g. `http://ddns:8080`. Makes this container a **sidecar**. Needs `SYNC_KEY`. |
+| `INSTANCE_NAME` | `main` | Name of this container on the status page. Required on sidecars. Lowercase letters, digits, `.`, `_`, `-`. |
+
 `PUID` and `PGID` from oznu are ignored with a warning. Use Docker's `user:`
 option instead. The image runs as UID 10001 by default.
 
@@ -188,6 +198,49 @@ can carry their own `API_KEY_<NAME>` when zones need separate credentials.
 If several records share the same name and type, only the first is managed and
 a warning is logged. Nothing is ever deleted unless `DELETE_ON_STOP` is set.
 
+## One status page for several containers
+
+A container handles any number of records, and records can carry their own
+`API_KEY_<NAME>`, so most setups need a single container. When you prefer to
+keep accounts in separate containers (one token per container, independent
+restarts), run one as the **main** container and the others as **sidecars**:
+
+```yaml
+services:
+  ddns:                              # main: publishes the status page
+    image: ghcr.io/notolac/ozgo-cf-ddns:latest
+    ports: ["8080:8080"]
+    environment:
+      - API_KEY=$API_KEY
+      - ZONE=example.com
+      - SUBDOMAIN_WWW=www
+      - SYNC_KEY=$SYNC_KEY
+      - INSTANCE_NAME=home
+  ddns-org:                          # sidecar: no published port
+    image: ghcr.io/notolac/ozgo-cf-ddns:latest
+    environment:
+      - API_KEY=$ORG_API_KEY
+      - ZONE=example.org
+      - SUBDOMAIN_NAS=nas
+      - STATIC_IP_NAS=192.0.2.10
+      - SYNC_URL=http://ddns:8080
+      - SYNC_KEY=$SYNC_KEY
+      - INSTANCE_NAME=org
+```
+
+- Each sidecar sends its status to `POST /api/sync` on the main container at
+  start-up, at the start and end of every round and every 30 s.
+- The key never travels: each report is signed with HMAC-SHA256 over a
+  timestamp and the body. The main container rejects bad signatures, clocks
+  more than 5 minutes apart and replayed reports. Use `https://` in `SYNC_URL`
+  if the traffic leaves a trusted network: the status itself is not encrypted.
+- The page shows one section per container. A sidecar that has not reported
+  for 2 minutes is marked *not reporting*; after 24 hours it is dropped.
+- DNS updates never depend on the main container: if it is down, sidecars keep
+  updating their records and report again when it is back.
+- `/healthz` and the Docker health check of each container cover only its own
+  records. `/api/status` on the main container adds a `sidecars` list.
+
 ## Status page, API and health
 
 | Endpoint | Auth | Description |
@@ -195,6 +248,7 @@ a warning is logged. Nothing is ever deleted unless `DELETE_ON_STOP` is set.
 | `GET /` | optional | Status table grouped by zone (the main domain), with per-zone counts: state, wanted vs. Cloudflare IP, proxy, last check, last change in Cloudflare, last error. Refreshes every 30 s. |
 | `GET /api/status` | optional | The same data as JSON. |
 | `GET /healthz` | none | `200` when every record is in sync, `503` otherwise. Only counts are returned, never names. |
+| `POST /api/sync` | `SYNC_KEY` signature | Main container only: status reports from sidecars. |
 
 The image defines a Docker `HEALTHCHECK` (`ozgo-cf-ddns healthcheck`), so
 `docker ps` and Portainer show the container as *unhealthy* while any record
@@ -210,6 +264,8 @@ level=WARN msg="sync failed" record=www.example.com type=A error="public IP dete
 level=INFO msg="record recovered" record=www.example.com type=A after_failures=3
 level=INFO msg="record updated" record=www.example.com type=A old_ip=203.0.113.50 ip=198.51.100.1 old_proxied=true proxied=true
 level=INFO msg="round finished" records=12 ok=12 updated=1 failed=0 duration=1.2s
+level=INFO msg="sidecar connected" instance=org version=0.2.0 records=3
+level=WARN msg="cannot report to the main container" url=http://ddns:8080 error="..." consecutive_failures=1
 ```
 
 Use `LOG_LEVEL=debug` to also log records that are already in sync and the

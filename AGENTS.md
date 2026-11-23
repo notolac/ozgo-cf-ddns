@@ -15,8 +15,9 @@ internal/cron       5-field cron parser
 internal/ipdetect   public IP (DNS whoami + HTTPS trace), static, command, interface
 internal/cloudflare minimal v4 API client
 internal/agent      sync loop, retries, shared status
-internal/web        status page, /api/status, /healthz (html/template, embedded)
-scripts/            smoke-test.sh (container test, no network)
+internal/hub        main/sidecar reports: HMAC signing, store, reporter
+internal/web        status page, /api/status, /healthz, /api/sync route (html/template, embedded)
+scripts/            smoke-test.sh (container test: no network, main + sidecar)
 ```
 
 ## Rules
@@ -27,12 +28,15 @@ scripts/            smoke-test.sh (container test, no network)
   `example.org`, `192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24` and
   `2001:db8::/32`.
 - **Secrets never reach logs, errors, the status page or the API.**
-  `config.Credentials` redacts itself, so keep it that way. Every new output
+  `config.Credentials` and `config.Secret` (SYNC_KEY) redact themselves, so
+  keep it that way. SYNC_KEY never goes over the wire: reports are signed. Every new output
   path needs a test that checks the token does not leak.
 - **Configuration compatibility is a contract.** Do not rename or change the
   meaning of an oznu variable (`API_KEY`, `ZONE`, `SUBDOMAIN`, `PROXIED`,
   `RRTYPE`, `CUSTOM_LOOKUP_CMD`, `INTERFACE`, `DNS_SERVER`, `DELETE_ON_STOP`,
-  `CRON`, `*_FILE`) or of the `_<NAME>` suffix rule. New options get new names
+  `CRON`, `*_FILE`) or of the `_<NAME>` suffix rule. The same applies to
+`SYNC_KEY`, `SYNC_URL`, `INSTANCE_NAME` and the `/api/sync` report format
+from v0.2.0 on. New options get new names
   and safe defaults. Breaking changes need a MAJOR version bump.
 - **Do not cache failures.** The reason this project exists is oznu caching an
   empty record ID at boot. Anything that failed must be looked up again in the

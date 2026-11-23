@@ -187,3 +187,69 @@ func TestErrorsDoNotLeakToken(t *testing.T) {
 		t.Fatalf("error leaks token or is nil: %v", err)
 	}
 }
+
+const testSyncKey = "0123456789abcdef0123456789abcdef-sync"
+
+func TestSyncDefaultsToStandalone(t *testing.T) {
+	cfg := load(t, "API_KEY=tok", "ZONE=example.com")
+	if cfg.Sync.Main() || cfg.Sync.Sidecar() || cfg.Sync.Instance != "main" {
+		t.Fatalf("sync = %+v", cfg.Sync)
+	}
+}
+
+func TestSyncMainAndSidecar(t *testing.T) {
+	main := load(t, "API_KEY=tok", "ZONE=example.com", "SYNC_KEY="+testSyncKey, "INSTANCE_NAME=Home")
+	if !main.Sync.Main() || main.Sync.Sidecar() || main.Sync.Instance != "home" {
+		t.Fatalf("main = %+v", main.Sync)
+	}
+	side := load(t, "API_KEY=tok", "ZONE=example.org", "SYNC_KEY="+testSyncKey,
+		"SYNC_URL=http://ddns:8080/", "INSTANCE_NAME=org")
+	if side.Sync.Main() || !side.Sync.Sidecar() || side.Sync.URL != "http://ddns:8080" {
+		t.Fatalf("sidecar = %+v", side.Sync)
+	}
+}
+
+func TestSyncKeyFile(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "key")
+	if err := os.WriteFile(p, []byte(testSyncKey+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := load(t, "API_KEY=tok", "ZONE=example.com", "SYNC_KEY_FILE="+p)
+	if string(cfg.Sync.Key) != testSyncKey {
+		t.Fatal("SYNC_KEY_FILE not read")
+	}
+}
+
+func TestSyncErrorsNeverContainTheKey(t *testing.T) {
+	short := "short-secret-value"
+	cases := []struct {
+		want string
+		env  []string
+	}{
+		{"too short", []string{"SYNC_KEY=" + short}},
+		{"SYNC_URL needs SYNC_KEY", []string{"SYNC_URL=http://ddns:8080", "INSTANCE_NAME=x"}},
+		{"http:// or https://", []string{"SYNC_KEY=" + testSyncKey, "SYNC_URL=ftp://ddns", "INSTANCE_NAME=x"}},
+		{"must not contain credentials", []string{"SYNC_KEY=" + testSyncKey, "SYNC_URL=http://u:p@ddns:8080", "INSTANCE_NAME=x"}},
+		{"INSTANCE_NAME is required", []string{"SYNC_KEY=" + testSyncKey, "SYNC_URL=http://ddns:8080"}},
+		{"INSTANCE_NAME", []string{"INSTANCE_NAME=bad name"}},
+		{"WEB_ENABLED=true", []string{"SYNC_KEY=" + testSyncKey, "WEB_ENABLED=false"}},
+	}
+	for _, c := range cases {
+		env := append([]string{"API_KEY=tok", "ZONE=example.com"}, c.env...)
+		_, err := Load(env)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%v: error = %v, want %q", c.env, err, c.want)
+			continue
+		}
+		if strings.Contains(err.Error(), short) || strings.Contains(err.Error(), testSyncKey) {
+			t.Errorf("%v: error leaks the key: %v", c.env, err)
+		}
+	}
+}
+
+func TestSecretRedacts(t *testing.T) {
+	s := Secret(testSyncKey)
+	if strings.Contains(s.String(), testSyncKey) || strings.Contains(s.LogValue().String(), testSyncKey) {
+		t.Fatal("secret printed")
+	}
+}

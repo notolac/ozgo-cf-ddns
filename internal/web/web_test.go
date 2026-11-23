@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/notolac/ozgo-cf-ddns/internal/agent"
+	"github.com/notolac/ozgo-cf-ddns/internal/hub"
 )
 
 type staticSource agent.Snapshot
@@ -30,7 +31,7 @@ func snapshot(healthy bool) staticSource {
 		RoundStart: now.Add(-time.Minute), RoundEnd: now.Add(-50 * time.Second), NextRound: now.Add(4 * time.Minute),
 		Healthy: healthy, OK: ok, Errors: errs,
 		Records: []agent.RecordStatus{{
-			Name: "www", FQDN: "www.example.com", Type: "A", Proxied: true, Source: "public", State: st,
+			Name: "www", FQDN: "www.example.com", Zone: "example.com", Type: "A", Proxied: true, Source: "public", State: st,
 			DesiredIP: "198.51.100.1", CloudflareIP: "198.51.100.1", CloudflareProxied: &p,
 			LastCheck: now.Add(-50 * time.Second), LastError: "<script>alert(1)</script>",
 		}},
@@ -159,5 +160,78 @@ func TestGroupByZone(t *testing.T) {
 	})
 	if len(z) != 2 || z[0].Zone != "example.com" || z[0].Records[0].Host != "deep.sub" || z[0].Errors != 1 || z[1].OK != 1 {
 		t.Fatalf("groups = %+v", z)
+	}
+}
+
+type fakeRemotes []hub.Remote
+
+func (f fakeRemotes) Remotes() []hub.Remote { return f }
+
+func remotes() fakeRemotes {
+	return fakeRemotes{
+		{Instance: "org", Received: now.Add(-10 * time.Second), Status: agent.Snapshot{
+			Version: "0.2.0", RoundEnd: now.Add(-20 * time.Second), Healthy: true, OK: 1,
+			Records: []agent.RecordStatus{{Name: "nas", FQDN: "nas.example.org", Zone: "example.org", Type: "A", State: agent.StateOK}},
+		}},
+		{Instance: "old", Received: now.Add(-time.Hour), Stale: true, Status: agent.Snapshot{
+			RoundEnd: now.Add(-time.Hour), Healthy: true, OK: 1,
+			Records: []agent.RecordStatus{{Name: "x", FQDN: "x.example.net", Zone: "example.net", Type: "A", State: agent.StateOK}},
+		}},
+	}
+}
+
+func TestIndexShowsSidecars(t *testing.T) {
+	h := Handler(snapshot(true), Options{Instance: "home", Remotes: remotes(), Now: func() time.Time { return now }})
+	b := body(t, get(t, h, "/"))
+	for _, want := range []string{
+		`id="instance-home"`, `id="instance-org"`, `id="instance-old"`,
+		"sidecar · version 0.2.0", "last report 10s ago", `<span class="badge stale">not reporting</span>`,
+		"nas.example.org", "attention needed", // a stale sidecar makes the page not healthy
+		"<b>3</b><span>in sync</span>", "<b>1</b><span>sidecar(s) not reporting</span>",
+	} {
+		if !strings.Contains(b, want) {
+			t.Errorf("page lacks %q", want)
+		}
+	}
+}
+
+func TestIndexWithoutSidecarsHasNoSections(t *testing.T) {
+	b := body(t, get(t, Handler(snapshot(true), Options{Instance: "main"}), "/"))
+	if strings.Contains(b, `id="instance-`) {
+		t.Fatal("standalone page should not show container sections")
+	}
+}
+
+func TestAPIStatusKeepsLayoutAndAddsSidecars(t *testing.T) {
+	h := Handler(snapshot(true), Options{Instance: "home", Remotes: remotes()})
+	var out struct {
+		agent.Snapshot
+		Instance string       `json:"instance"`
+		Sidecars []hub.Remote `json:"sidecars"`
+	}
+	if err := json.Unmarshal([]byte(body(t, get(t, h, "/api/status"))), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Records[0].FQDN != "www.example.com" || out.Instance != "home" || len(out.Sidecars) != 2 || !out.Sidecars[1].Stale {
+		t.Fatalf("api = %+v", out)
+	}
+}
+
+func TestSyncRouteBypassesBasicAuthButNeedsSignature(t *testing.T) {
+	st := hub.NewStore("home", func() time.Time { return now })
+	h := Handler(snapshot(true), Options{User: "admin", Password: "pw", Instance: "home", Remotes: st,
+		Sync: hub.Handler(st, []byte("0123456789abcdef0123456789abcdef-web"), nil)})
+	req := httptest.NewRequest(http.MethodPost, hub.Path, strings.NewReader("{}"))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized || rec.Header().Get("WWW-Authenticate") != "" {
+		t.Fatalf("unsigned report: %d %v", rec.Code, rec.Header())
+	}
+
+	plain := Handler(snapshot(true), Options{})
+	rec = httptest.NewRecorder()
+	plain.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, hub.Path, strings.NewReader("{}")))
+	if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("sync route on a standalone container: %d", rec.Code)
 	}
 }

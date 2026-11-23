@@ -411,3 +411,21 @@ func TestBackoff(t *testing.T) {
 		}
 	}
 }
+
+func TestChangesSignalsAfterEveryRoundWithoutBlocking(t *testing.T) {
+	h := newHarness(t, "API_KEY=good", "ZONE=example.com", "SUBDOMAIN=www")
+	ch := h.agent.Status().Changes()
+	for range 3 { // nobody reads: the agent must not block
+		h.agent.Round(context.Background())
+	}
+	select {
+	case <-ch:
+	default:
+		t.Fatal("no change signalled")
+	}
+	select {
+	case <-ch:
+		t.Fatal("notifications should be coalesced")
+	default:
+	}
+}

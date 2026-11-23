@@ -26,3 +26,20 @@ services:
       # - WEB_PASSWORD=$WEB_PASSWORD
       # - LOG_LEVEL=info
       # - TZ=Europe/Madrid
+      # One status page for several containers (see below)
+      # - SYNC_KEY=$SYNC_KEY    # openssl rand -hex 32
+      # - INSTANCE_NAME=home
+
+  # Optional sidecar: another account (another token) in the same stack. It has
+  # no published port and reports its status to the "ddns" container above, so
+  # both show on one page. Uncomment SYNC_KEY above as well.
+  # ddns-other-account:
+  #   image: ghcr.io/notolac/ozgo-cf-ddns:latest
+  #   restart: unless-stopped
+  #   environment:
+  #     - API_KEY=$OTHER_API_KEY
+  #     - ZONE=example.net
+  #     - SUBDOMAIN_APP=app
+  #     - SYNC_URL=http://ddns:8080
+  #     - SYNC_KEY=$SYNC_KEY
+  #     - INSTANCE_NAME=other-account

@@ -24,6 +24,7 @@ import (
 
 	"github.com/notolac/ozgo-cf-ddns/internal/agent"
 	"github.com/notolac/ozgo-cf-ddns/internal/config"
+	"github.com/notolac/ozgo-cf-ddns/internal/hub"
 	"github.com/notolac/ozgo-cf-ddns/internal/web"
 )
 
@@ -68,7 +69,8 @@ func run() int {
 	for _, w := range cfg.Warnings {
 		log.Warn(w)
 	}
-	log.Info("starting", "version", version, "records", len(cfg.Records), "schedule", cfg.Schedule.String())
+	log.Info("starting", "version", version, "records", len(cfg.Records), "schedule", cfg.Schedule.String(),
+		"instance", cfg.Sync.Instance, "role", role(cfg.Sync))
 	for _, r := range cfg.Records {
 		log.Info("record configured", "name", r.Name, "record", r.FQDN(), "type", r.Type,
 			"proxied", r.Proxied, "source", string(r.Source), "credentials", r.Credentials,
@@ -80,11 +82,27 @@ func run() int {
 
 	a := agent.New(cfg, agent.Options{Version: version, Logger: log})
 
+	webOpt := web.Options{User: cfg.Web.User, Password: cfg.Web.Password, Logger: log, Instance: cfg.Sync.Instance}
+	if cfg.Sync.Main() {
+		store := hub.NewStore(cfg.Sync.Instance, nil)
+		webOpt.Remotes = store
+		webOpt.Sync = hub.Handler(store, []byte(cfg.Sync.Key), log)
+		log.Info("accepting sidecar reports", "path", hub.Path)
+	}
+	if cfg.Sync.Sidecar() {
+		rep := &hub.Reporter{
+			URL: cfg.Sync.URL, Key: []byte(cfg.Sync.Key), Instance: cfg.Sync.Instance,
+			Source: a.Status(), Logger: log, Client: &http.Client{Timeout: 15 * time.Second},
+		}
+		log.Info("reporting to the main container", "url", cfg.Sync.URL)
+		go rep.Run(ctx, a.Status().Changes())
+	}
+
 	var srv *http.Server
 	if cfg.Web.Enabled {
 		srv = &http.Server{
 			Addr:              ":" + strconv.Itoa(cfg.Web.Port),
-			Handler:           web.Handler(a.Status(), web.Options{User: cfg.Web.User, Password: cfg.Web.Password, Logger: log}),
+			Handler:           web.Handler(a.Status(), webOpt),
 			ReadHeaderTimeout: 5 * time.Second,
 			ReadTimeout:       10 * time.Second,
 			WriteTimeout:      10 * time.Second,
@@ -112,6 +130,17 @@ func run() int {
 	}
 	log.Info("stopped")
 	return 0
+}
+
+func role(s config.Sync) string {
+	switch {
+	case s.Sidecar():
+		return "sidecar"
+	case s.Main():
+		return "main"
+	default:
+		return "standalone"
+	}
 }
 
 // healthcheck is used by the Docker HEALTHCHECK. It reads only WEB_ENABLED and
