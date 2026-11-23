@@ -75,7 +75,7 @@ footer { margin-top: 16px; color: var(--muted); font-size: 12px; }
     <tbody>
     {{range .Records}}
     <tr>
-      <td><code><span class="host">{{.Host}}</span>{{if ne .Host "@"}}<span class="zonepart">.{{.Zone}}</span>{{end}}</code><div class="small">{{.Type}} · {{.Name}}</div></td>
+      <td><code title="{{.FQDN}}"><span class="host">{{.Host}}</span>{{if ne .Host "@"}}<span class="zonepart">.{{.Zone}}</span>{{end}}</code><div class="small">{{.Type}} · {{.Name}}</div></td>
       <td><span class="badge {{.State}}">{{.State}}</span>{{if gt .Failures 0}}<div class="small">{{.Failures}} failure(s) in a row</div>{{end}}</td>
       <td><code>{{or .DesiredIP "—"}}</code><div class="small"><code>{{or .CloudflareIP "—"}}</code></div></td>
       <td>{{if .Proxied}}proxied{{else}}DNS only{{end}}{{if .CloudflareProxied}}{{if ne (deref .CloudflareProxied) .Proxied}}<div class="small">Cloudflare differs</div>{{end}}{{end}}</td>

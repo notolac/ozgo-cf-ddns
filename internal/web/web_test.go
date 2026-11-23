@@ -141,7 +141,7 @@ func TestIndexGroupsRecordsByZone(t *testing.T) {
 	if com < 0 || org < 0 || com > org {
 		t.Fatalf("zones missing or out of order (com=%d org=%d)", com, org)
 	}
-	if !strings.Contains(b, `<span class="host">www</span><span class="zonepart">.example.org</span>`) {
+	if !strings.Contains(b, `<code title="www.example.org"><span class="host">www</span><span class="zonepart">.example.org</span>`) {
 		t.Error("host and zone not shown separately")
 	}
 	if !strings.Contains(b, `<span class="host">@</span></code>`) {
