@@ -135,6 +135,11 @@ func TestHandlerRejects(t *testing.T) {
 		{"main's name", func(h http.Handler) *httptest.ResponseRecorder {
 			return signed(t, h, ts, Report{Instance: "main", Status: snap()})
 		}, 409},
+		{"bad version", func(h http.Handler) *httptest.ResponseRecorder {
+			sn := snap()
+			sn.Version = "1.0\nlevel=ERROR msg=forged"
+			return signed(t, h, ts, Report{Instance: "org", Status: sn})
+		}, 400},
 		{"unknown state", func(h http.Handler) *httptest.ResponseRecorder {
 			return signed(t, h, ts, Report{Instance: "org", Status: snap("evil")})
 		}, 400},
@@ -302,5 +307,11 @@ func TestReporterRecovers(t *testing.T) {
 	}
 	if strings.Contains(out, string(key)) {
 		t.Fatal("key in logs")
+	}
+}
+
+func TestLogSafe(t *testing.T) {
+	if got := logSafe("a\nlevel=ERROR\r b"); got != "alevel=ERROR b" {
+		t.Fatalf("logSafe = %q", got)
 	}
 }

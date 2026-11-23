@@ -7,8 +7,15 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
+
+// logSafe strips line breaks from a value that came from a request. slog
+// already quotes values, this keeps log lines intact for any handler.
+func logSafe(s string) string {
+	return strings.NewReplacer("\n", "", "\r", "").Replace(s)
+}
 
 // Handler accepts signed reports from sidecars (POST /api/sync).
 func Handler(store *Store, key []byte, log *slog.Logger) http.Handler {
@@ -57,11 +64,11 @@ func Handler(store *Store, key []byte, log *slog.Logger) http.Handler {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		case errors.Is(err, ErrConflict):
-			log.Warn("sync report rejected", "instance", rep.Instance, "error", err.Error())
+			log.Warn("sync report rejected", "instance", logSafe(rep.Instance), "error", logSafe(err.Error()))
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		case errors.Is(err, ErrTooManyPeers):
-			log.Warn("sync report rejected", "instance", rep.Instance, "error", err.Error())
+			log.Warn("sync report rejected", "instance", logSafe(rep.Instance), "error", logSafe(err.Error()))
 			http.Error(w, err.Error(), http.StatusTooManyRequests)
 			return
 		default:
@@ -69,7 +76,7 @@ func Handler(store *Store, key []byte, log *slog.Logger) http.Handler {
 			return
 		}
 		if isNew {
-			log.Info("sidecar connected", "instance", rep.Instance, "version", rep.Status.Version,
+			log.Info("sidecar connected", "instance", logSafe(rep.Instance), "version", logSafe(rep.Status.Version),
 				"records", len(rep.Status.Records))
 		}
 		w.WriteHeader(http.StatusNoContent)

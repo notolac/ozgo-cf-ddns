@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"sync"
@@ -49,6 +50,8 @@ const (
 	// renamed sidecar does not stay on the page forever.
 	ForgetAfter = 24 * time.Hour
 )
+
+var versionRE = regexp.MustCompile(`^[0-9A-Za-z.+_-]{0,64}$`)
 
 // Report is the body a sidecar sends.
 type Report struct {
@@ -115,6 +118,9 @@ func (s *Store) Accept(r Report, ts int64) (isNew bool, err error) {
 	}
 	if r.Instance == s.local {
 		return false, fmt.Errorf("%w: %q is the main container", ErrConflict, r.Instance)
+	}
+	if !versionRE.MatchString(r.Status.Version) {
+		return false, fmt.Errorf("%w: bad version", ErrInvalid)
 	}
 	if len(r.Status.Records) > MaxRecords {
 		return false, fmt.Errorf("%w: more than %d records", ErrInvalid, MaxRecords)
