@@ -85,6 +85,10 @@ func (s *server) auth(next http.Handler) http.Handler {
 	if s.opt.User == "" {
 		return next
 	}
+	// SHA-256 is not used to store or protect the password: both sides are
+	// hashed in memory only so subtle.ConstantTimeCompare sees equal-length
+	// inputs and the comparison does not leak the length of the secret.
+	// (CodeQL go/weak-sensitive-data-hashing: false positive, dismissed.)
 	wantUser := sha256.Sum256([]byte(s.opt.User))
 	wantPass := sha256.Sum256([]byte(s.opt.Password))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
