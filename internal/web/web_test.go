@@ -128,3 +128,36 @@ func TestUnknownPathAndMethod(t *testing.T) {
 		t.Errorf("POST: %d", rec.Code)
 	}
 }
+
+func TestIndexGroupsRecordsByZone(t *testing.T) {
+	snap := snapshot(true)
+	snap.Records = []agent.RecordStatus{
+		{Name: "www", FQDN: "www.example.org", Zone: "example.org", Type: "A", State: agent.StateOK},
+		{Name: "apex", FQDN: "example.com", Zone: "example.com", Type: "A", State: agent.StateError},
+		{Name: "blog", FQDN: "blog.example.org", Zone: "example.org", Type: "A", State: agent.StatePending},
+	}
+	b := body(t, get(t, Handler(snap, Options{}), "/"))
+	com, org := strings.Index(b, `id="zone-example.com"`), strings.Index(b, `id="zone-example.org"`)
+	if com < 0 || org < 0 || com > org {
+		t.Fatalf("zones missing or out of order (com=%d org=%d)", com, org)
+	}
+	if !strings.Contains(b, `<span class="host">www</span><span class="zonepart">.example.org</span>`) {
+		t.Error("host and zone not shown separately")
+	}
+	if !strings.Contains(b, `<span class="host">@</span></code>`) {
+		t.Error("apex not shown as @")
+	}
+	if !strings.Contains(b, "2 record(s) · 1 in sync · 1 pending") {
+		t.Error("zone summary missing")
+	}
+}
+
+func TestGroupByZone(t *testing.T) {
+	z := groupByZone([]agent.RecordStatus{
+		{FQDN: "a.example.org", Zone: "example.org", State: agent.StateOK},
+		{FQDN: "deep.sub.example.com", Zone: "example.com", State: agent.StateError},
+	})
+	if len(z) != 2 || z[0].Zone != "example.com" || z[0].Records[0].Host != "deep.sub" || z[0].Errors != 1 || z[1].OK != 1 {
+		t.Fatalf("groups = %+v", z)
+	}
+}

@@ -18,6 +18,8 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/notolac/ozgo-cf-ddns/internal/agent"
@@ -130,9 +132,59 @@ func (s *server) api(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
+// zoneView groups the records of one zone (the main domain they belong to).
+type zoneView struct {
+	Zone                string
+	OK, Errors, Pending int
+	Records             []recordView
+}
+
+// recordView adds the host part of the name, shown in front of the zone.
+type recordView struct {
+	agent.RecordStatus
+	Host string // "@" for the zone apex
+}
+
+type pageView struct {
+	agent.Snapshot
+	Zones []zoneView
+}
+
+// groupByZone sorts the records into one group per zone, in zone order.
+// Records keep their configured order inside a zone.
+func groupByZone(records []agent.RecordStatus) []zoneView {
+	idx := map[string]int{}
+	var zones []zoneView
+	for _, r := range records {
+		i, ok := idx[r.Zone]
+		if !ok {
+			i = len(zones)
+			idx[r.Zone] = i
+			zones = append(zones, zoneView{Zone: r.Zone})
+		}
+		z := &zones[i]
+		host := "@"
+		if r.FQDN != r.Zone {
+			host = strings.TrimSuffix(r.FQDN, "."+r.Zone)
+		}
+		z.Records = append(z.Records, recordView{RecordStatus: r, Host: host})
+		switch r.State {
+		case agent.StateOK:
+			z.OK++
+		case agent.StateError:
+			z.Errors++
+		default:
+			z.Pending++
+		}
+	}
+	sort.SliceStable(zones, func(i, j int) bool { return zones[i].Zone < zones[j].Zone })
+	return zones
+}
+
 func (s *server) index(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := s.page.Execute(w, s.src.Snapshot()); err != nil {
+	snap := s.src.Snapshot()
+	if err := s.page.Execute(w, pageView{Snapshot: snap, Zones: groupByZone(snap.Records)}); err != nil {
 		s.opt.Logger.Error("rendering status page", "error", err.Error())
 	}
 }

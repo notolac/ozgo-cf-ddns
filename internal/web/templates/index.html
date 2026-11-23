@@ -38,6 +38,10 @@ code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .error { color: var(--err); background: var(--err-bg); }
 .pending { color: var(--wait); background: var(--wait-bg); }
 .errtext { color: var(--err); max-width: 340px; word-break: break-word; }
+tbody.zone th { background: var(--bg); text-transform: none; letter-spacing: 0; font-size: 14px; color: var(--text); padding-top: 14px; }
+tbody.zone th .small { font-weight: 400; margin-left: 8px; }
+.host { font-weight: 600; }
+.zonepart { color: var(--muted); }
 footer { margin-top: 16px; color: var(--muted); font-size: 12px; }
 </style>
 </head>
@@ -53,6 +57,7 @@ footer { margin-top: 16px; color: var(--muted); font-size: 12px; }
     <div class="card"><b>{{.OK}}</b><span>in sync</span></div>
     <div class="card"><b>{{.Errors}}</b><span>failing</span></div>
     <div class="card"><b>{{.Pending}}</b><span>pending</span></div>
+    <div class="card"><b>{{len .Zones}}</b><span>zones</span></div>
     <div class="card"><b>{{ago .RoundEnd}}</b><span>last round · {{ts .RoundEnd}}</span></div>
     <div class="card"><b>{{ago .NextRound}}</b><span>next round · {{ts .NextRound}}</span></div>
   </div>
@@ -63,10 +68,14 @@ footer { margin-top: 16px; color: var(--muted); font-size: 12px; }
       <th>Record</th><th>State</th><th>IP (wanted / Cloudflare)</th><th>Proxy</th><th>Source</th>
       <th>Last check</th><th>Last change in Cloudflare</th><th>Last error</th>
     </tr></thead>
+    {{range .Zones}}
+    <tbody class="zone" id="zone-{{.Zone}}">
+    <tr><th colspan="8">{{.Zone}}<span class="small">{{len .Records}} record(s) · {{.OK}} in sync{{if .Errors}} · <span class="badge error">{{.Errors}} failing</span>{{end}}{{if .Pending}} · {{.Pending}} pending{{end}}</span></th></tr>
+    </tbody>
     <tbody>
     {{range .Records}}
     <tr>
-      <td><code>{{.FQDN}}</code><div class="small">{{.Type}} · {{.Name}}</div></td>
+      <td><code><span class="host">{{.Host}}</span>{{if ne .Host "@"}}<span class="zonepart">.{{.Zone}}</span>{{end}}</code><div class="small">{{.Type}} · {{.Name}}</div></td>
       <td><span class="badge {{.State}}">{{.State}}</span>{{if gt .Failures 0}}<div class="small">{{.Failures}} failure(s) in a row</div>{{end}}</td>
       <td><code>{{or .DesiredIP "—"}}</code><div class="small"><code>{{or .CloudflareIP "—"}}</code></div></td>
       <td>{{if .Proxied}}proxied{{else}}DNS only{{end}}{{if .CloudflareProxied}}{{if ne (deref .CloudflareProxied) .Proxied}}<div class="small">Cloudflare differs</div>{{end}}{{end}}</td>
@@ -77,6 +86,7 @@ footer { margin-top: 16px; color: var(--muted); font-size: 12px; }
     </tr>
     {{end}}
     </tbody>
+    {{end}}
   </table>
   </div>
   <footer>Started {{ts .Started}} · JSON at <code>/api/status</code> · refreshes every 30 s</footer>

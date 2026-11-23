@@ -39,8 +39,8 @@ clients.
 - Fixed addresses with `STATIC_IP` (or the `CUSTOM_LOOKUP_CMD=echo <ip>` form).
 - Proxy flag enforced: if someone flips the orange cloud by hand, the next
   round restores the configured value.
-- Read-only status page, JSON API and health endpoint, with optional basic
-  auth.
+- Read-only status page grouped by zone, JSON API and health endpoint, with
+  optional basic auth.
 - Structured logs (text or JSON) that never contain credentials.
 - Small image: static Go binary on Alpine, runs as a non-root user, multi-arch
   (amd64 and arm64).
@@ -192,7 +192,7 @@ a warning is logged. Nothing is ever deleted unless `DELETE_ON_STOP` is set.
 
 | Endpoint | Auth | Description |
 |----------|------|-------------|
-| `GET /` | optional | Status table: state, wanted vs. Cloudflare IP, proxy, last check, last change in Cloudflare, last error. Refreshes every 30 s. |
+| `GET /` | optional | Status table grouped by zone (the main domain), with per-zone counts: state, wanted vs. Cloudflare IP, proxy, last check, last change in Cloudflare, last error. Refreshes every 30 s. |
 | `GET /api/status` | optional | The same data as JSON. |
 | `GET /healthz` | none | `200` when every record is in sync, `503` otherwise. Only counts are returned, never names. |
 
